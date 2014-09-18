@@ -18,7 +18,7 @@ node (npm comes with node)
 
 Clone the repository:
 ```
-git clone https://github.com/tsoporan/chat.git chat
+git clone https://github.com/hashbang/chat.git hashchat
 ```
 
 Install deps:
