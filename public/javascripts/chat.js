@@ -38,6 +38,11 @@ jQuery(document).ready(function($) {
     }
   }
 
+  // Handle accidentally closing.
+  $(window).on('beforeunload', function() {
+    return 'Leaving this page will disconnect you from chat!';
+  });
+
   // Take care of screen resizes for chat window.
   $(window).on('resize', function() {
     setContainerHeight({ state : history.state });
@@ -73,6 +78,9 @@ jQuery(document).ready(function($) {
 
       // Show current channel.
       channelEl.removeClass('hidden');
+
+      // Update notifications to read.
+      updateNotifications(channel, 'read');
 
       // Set focus to typing area.
       $('input[name=message]').focus();
@@ -219,16 +227,47 @@ jQuery(document).ready(function($) {
 
   }
 
-  function changeName(nickObj) {
-    var channel        = nickObj.channel,
-        oldNick        = nickObj.oldNick,
-        nick           = nickObj.nick,
-        nameContainer  = $('div.channel[data-channel="' + channel + '"] div.names ul'),
-        exists         = nameContainer.find('li[data-nick="'+ oldNick +'"]');
+  function changeName(opts) {
+    var channels = opts.channels,
+        oldNick  = opts.oldNick,
+        newNick  = opts.newNick,
+        when     = opts.when,
+        us       = opts.us,
+        nameContainer,
+        exists;
 
-    if (exists.length) {
-      exists.attr('data-nick', nick);
-      exists.find('.nick-text').text(nick);
+    var msgObj = {
+      msg : oldNick + ' changed their name to: ' + newNick,
+      type: 'system',
+      when: when
+    };
+
+    if (us) {
+      socketNick = newNick;
+      $('.menu-nick').text(newNick);
+    }
+
+    if (channels.length) {
+      $.each(channels, function(i, channel) {
+
+        msgObj.channel = channel;
+
+        // Find all name containers for channel and change the names.
+        nameContainer = $('div.channel[data-channel="' + channel + '"] div.names ul');
+        exists        = nameContainer.find('li[data-nick="' + oldNick + '"]');
+
+        if (exists.length) {
+          exists.attr('data-nick', newNick);
+          exists.find('.nick-text').text(newNick);
+        }
+
+        // Notify channel.
+        postToChannel(msgObj);
+
+      });
+    } else {
+      // Notify main channel.
+      postToChannel(msgObj);
     }
 
   }
@@ -303,6 +342,46 @@ jQuery(document).ready(function($) {
     return newMsg || msg;
   }
 
+  function updateNotifications(channel, action) {
+    console.log('channel', channel, action);
+    var focusedChannel = history.state.channel || 'main',
+        channelListEl  = $('#channel-list li[data-channel="' + channel + '"]'),
+        messageCounter = channelListEl.find('.msg-counter');
+
+    switch (action) {
+      case 'read':
+        messageCounter.fadeOut(function() {
+          messageCounter.remove();
+        });
+
+        break;
+
+      case 'add':
+
+        // If we're focused on this channel do nothing, otherwise update the counters.
+        if (channel === focusedChannel) {
+          return;
+        }
+
+        if (!messageCounter.length) {
+          channelListEl.append('<span class="msg-counter">1</span>');
+        } else {
+
+          var count    = parseInt(messageCounter.text(), 10),
+              newCount = ++count;
+
+           messageCounter.text(newCount);
+        }
+
+        break;
+
+      default:
+
+        break;
+
+    }
+  }
+
   function postToChannel(msgObj) {
 
     console.log('post to channel', msgObj);
@@ -359,6 +438,8 @@ jQuery(document).ready(function($) {
       channels[channel].msgIdx = null;
 
       containers = $('#channel-containers div[data-channel="' + channel + '"] div.messages ul');
+
+      updateNotifications(channel, 'add');
 
     } else { // If no channel is provided send to all channels.
       containers = $('#channel-containers div.messages ul');
@@ -417,7 +498,9 @@ jQuery(document).ready(function($) {
         break;
     }
 
-    scrollToBottom(channel);
+    if (channel) {
+      scrollToBottom(channel);
+    }
   }
 
   function scrollToBottom(channel) {
@@ -454,6 +537,14 @@ jQuery(document).ready(function($) {
                            '</div>' +
                            (root || isPm ? '' : '<div class="small-3 columns names"><ul class="no-bullet"></ul></div>') +
                            '</div>';
+
+
+      // Store channel.
+      var exists = channel in channels;
+
+      if (!exists) {
+        channels[channel] = {};
+      }
 
       // Check for existing loaded UI, and continue from there.
       var existingChannelLink = channelList.find('li[data-channel="' + channel + '"]');
@@ -525,6 +616,7 @@ jQuery(document).ready(function($) {
 
   // Connecting to IRC from web.
   $('form.connect').on('valid.fndtn.abide', function() {
+
     var server     = $('input[name=server]').val(),
         channels   = $('input[name=channels]').val(),
         socketNick = $('input[name=nickName]').val();
@@ -538,6 +630,20 @@ jQuery(document).ready(function($) {
     });
 
     return false;
+  });
+
+  // Changing nick through form.
+  $('form.changenick').on('valid.fndtn.abide', function() {
+      var newNick = $('input[name="newNick"]').val();
+
+      $('a.close-reveal-modal').click();
+
+      socket.emit('webCommand', {
+        command: '/nick ' + newNick,
+      });
+
+      return false;
+
   });
 
   // Sending message from web.
@@ -611,7 +717,7 @@ jQuery(document).ready(function($) {
         msgObj,
         last;
 
-   
+
     var codes = {
       9 : function() {
         if (e) {
@@ -621,19 +727,25 @@ jQuery(document).ready(function($) {
         // A value exists and the last character is not a space, try to autocomplete.
         if (val && val[val.length-1] !== " ") {
 
-          var word    = val.split(' ').slice(-1), // We only want the last word to autocomplete.
-              match   = nameComplete(word, channel);
+          var words   = val.split(' '),
+              last    = val.split(' ').slice(-1), // We only want the last word to autocomplete.
+              match   = nameComplete(last, channel),
+              newVal;
 
           if (match) {
             // Plug in the value.
-            var newVal = val.split(' ').slice(0, -1).join(' ') + ' ' +  match + ' ';
+            if (words.length > 1) {
+              newVal = words.slice(0, -1).join(' ') + ' ' + match + ' ';
+            } else {
+              newVal = match + ' ';
+            }
             inputEl.val(newVal);
           }
         }
 
       },
       38 : function()  {
-
+        var timeout;
         // Up key - walk up message history.
 
         msgIdx   = channels[channel].msgIdx;
@@ -652,7 +764,14 @@ jQuery(document).ready(function($) {
 
         msgObj = messages[msgIdx];
 
-        inputEl.val(msgObj.msg);
+        if (timeout) {
+          clearTimeout(timeout);
+        }
+
+        timeout = setTimeout(function() {
+          inputEl.val(msgObj.msg + ' ');
+          inputEl.focus();
+        }, 100);
 
       },
 
@@ -671,7 +790,8 @@ jQuery(document).ready(function($) {
 
         msgObj = messages[msgIdx];
 
-        inputEl.val(msgObj.msg);
+        inputEl.val('');
+        inputEl.val(msgObj.msg + ' ').focus();
       },
 
     };
@@ -740,6 +860,7 @@ jQuery(document).ready(function($) {
     });
 
     $('#change-nick').on('click', function() {
+      $('#changeNickModal').foundation('reveal', 'open');
       return false;
     });
 
@@ -853,28 +974,7 @@ jQuery(document).ready(function($) {
         us       = data.us,
         when     = data.when;
 
-
-    if (us) {
-      socketNick = newNick;
-      $('.menu-nick').text(newNick);
-    }
-
-    var msgObj = {
-      msg : oldNick + ' changed their name to: ' + newNick,
-      type: 'system',
-      when: when
-    };
-
-    if (channels.length) {
-      $.each(channels, function(i, channel) {
-        msgObj.channel = channel;
-        changeName({ channel: channel, oldNick: oldNick, nick: newNick });
-        postToChannel(msgObj);
-
-      });
-    } else {
-      postToChannel(msgObj); // Post to root window.
-    }
+    changeName({channels: channels, us : us, oldNick : oldNick, newNick : newNick, when: when });
 
   });
 
