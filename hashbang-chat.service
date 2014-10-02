@@ -1,0 +1,13 @@
+[Unit]
+Description=Web based chat client for #! users
+Documentation=https://github.com/hashbang/chat
+Wants=nginx.service
+
+[Service]
+ExecStart=/usr/bin/npm start
+WorkingDirectory=/var/www/html/chat.hashbang.sh
+Restart=on-failure
+User=chat
+
+[Install]
+WantedBy=multi-user.target
