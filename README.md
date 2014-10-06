@@ -23,7 +23,7 @@ git clone https://github.com/hashbang/chat.git hashchat
 
 Install deps:
 ```
-cd chat; npm install
+cd hashchat; npm install
 ```
 
 Start it up:
